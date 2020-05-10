@@ -13,13 +13,7 @@ function onOpen(e) {
 function run() {
   checkPartialRow(getFirstEmptyRow()-1); // delete a potentially partially filled row
   var match_history = findUniqueMatchIds();
-  if(match_history.length === 0 || match_history == 'exit') {
-    return 'exit';
-  }
-  var dtOld = getMatchTimestamp(getMatch(getLastMatchId()));
-  var dtNew = getMatchTimestamp(getMatch(match_history[0]));
-  if(dtNew < dtOld) {
-    run();
+  if(!match_history || match_history == 'exit') {
     return 'exit';
   }
   var result = populate(match_history);
@@ -30,19 +24,20 @@ function run() {
 }
 
 /*
- * Gets the timestamp of a given match
+ * Gets an array of all games we haven't recorded and then populates the data for it on our sheet
+ * A special version in order to populate while skipping the league info
  */
-function getMatchTimestamp(match) {
-  return match['matchCreation'];
-}
-
-/*
- * Gets the last matchId in the sheet
- */
-function getLastMatchId() {
-  var s = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = s.getSheetByName('Data');
-  return sheet.getRange(getFirstEmptyRow()-1, getSheetTranslationIndex('Match Id')).getValue();
+function runInitial() {
+  checkPartialRow(getFirstEmptyRow()-1); // delete a potentially partially filled row
+  var match_history = findUniqueMatchIds();
+  if(!match_history || match_history == 'exit') {
+    return 'exit';
+  }
+  var result = populate(match_history, null, true);
+  // indicates a partial entry so delete the most recent row
+  if(result == 'exit') {
+    deleteRow(getFirstEmptyRow() - 1);
+  }
 }
 
 /*
@@ -53,49 +48,14 @@ function buildMenu(e) {
   var ui = SpreadsheetApp.getUi();
   ui.createMenu('Ranked')
     .addItem('Run', 'run')
+    .addItem('Run Initial', 'runInitial')
     .addItem('Correct Row', 'fixRow')
-    .addItem('Setup', 'setup')
-    .addItem('Add Rift Herald', 'fixColumn')
     .addToUi();
   /*var menu = SpreadsheetApp.getUi().createAddonMenu();
   if(e && e.authMode == ScriptApp.AuthMode.NONE) {
     menu.addItem('Run', 'run');
     menu.addItem('Correct Row', 'fixRow'); // since we can't actually pass arguments
   }*/
-}
-
-/*
- * Setup the spreadsheet boilerplate stuff
- * Sets up the configuration page and the headers
- */
-function setup() {
-  // check if everything is setup already or not
-  // if it is, just ignore this and do nothing
-  var s = SpreadsheetApp.getActiveSpreadsheet();  
-  if(s.getNumSheets() > 1 && s.getSheetByName('Configuration') && s.getSheetByName('Data')) {
-    return;
-  }
-  if(s.getActiveSheet().getName() === 'Sheet1') {
-    s.renameActiveSheet('Data');
-  }
-  
-  var headers = ['Match Id','Patch','Date','Time','Length','My Role','My Champion','Side','Result','Kills','Deaths','Assists','My KDA','Highest KDA','Kill Contribution','Kill Contribution Diff',
-                 'Death Contribution','CS','CS/Min','My Top','My Top KDA','My Jungle','My Jungle KDA','My Mid','My Mid KDA','My ADC','My ADC KDA','My Support','My Support KDA','Their Top','Their Top KDA','Their Jungle',
-                 'Their Jungle KDA','Their Mid','Their Mid KDA','Their ADC','Their ADC KDA','Their Support','Their Support KDA','League	Division','Current LP','LP Change','Promos','Duoer','Duo Role','Total CS Difference',
-                 'CS/Min Delta 0 to 10','CS/Min Delta 10 to 20','CS/Min Delta 20 to 30','CS/Min Delta 30 to End','CS/Min Diff Delta 0 to 10','CS/Min Diff Delta 10 to 20','CS/Min Diff Delta 20 to 30',
-                 'CS/Min Diff Delta 30 to End','Gold Delta 0 to 10','Gold Delta 10 to 20','Gold Delta 20 to 30','Gold Delta 30 to End','Kill Diff','Death Diff','Assist Diff','KDA Diff','Ban 1','Ban 2','Ban 3',
-                 'Ban 4','Ban 5','Ban 6','My Dragons','Enemy Dragons','My Barons','Enemy Barons','First Blood','First Tower','First Inhibitor','First Dragon','First Baron','Damage to Champions','Damage to Champions Diff',
-                 'Wards Placed','Wards Placed Diff','Wards Destroyed','Wards Destroyed Diff','Vision Wards Bought','Vision Wards Bought Diff','My AFK','Their AFK','Individual Notes','Team Notes','Positives','Negatives','Learn/Improve'];
-  s.getSheetByName('Data').appendRow(headers);
-  
-  s.insertSheet('Configuration', 1);
-  var sheet = s.getSheetByName('Configuration');
-  var items = ['api_key', 'region', 'name', 'id', 'season', 'correct_row', 'patch'];
-  for(var i = 0; i  < items.length; i++) {
-    sheet.appendRow([items[i]]);
-  }
-  Browser.msgBox('Please fill out the api_key, region, name, and season values before continuing');
-  
 }
 
 /*
@@ -129,7 +89,7 @@ function getInfo(value) {
     return sheet.getRange('B2').getValue();
   }
   if(value == 'summoner_name') {
-    return sheet.getRange('B3').getValue().toLowerCase();
+    return sheet.getRange('B3').getValue();
   }
   if(value == 'season') {
     return sheet.getRange('B5').getValue();
@@ -157,6 +117,17 @@ function getInfo(value) {
       }
     }
     sheet.getRange('B4').setValue(val);
+    return val;
+  }
+  if(value == 'account_id') {
+    val = sheet.getRange('B8').getValue();
+    if(!val) {
+      val = getAccountId();
+      if(val == 'exit') {
+        return 'exit';
+      }
+    }
+    sheet.getRange('B8').setValue(val);
     return val;
   }
 }
@@ -196,12 +167,6 @@ function populate(match_history, specificRow, discludeLeague) {
   var sheet = s.getSheetByName('Data');
   for(n = 0; n < match_history.length; n++) {
     var row;
-    // this makes it so we always disclude league information unless there's only one game in the match history
-    // because every game except our last game is guaranteed to have wrong information
-    var includeLeague = false;
-    if(n === match_history.length - 1) {
-      includeLeague = true;
-    }
     if(!specificRow) {
       sheet.appendRow([match_history[n]]);
       row = getFirstEmptyRow() - 1;
@@ -270,7 +235,8 @@ function populate(match_history, specificRow, discludeLeague) {
     if(checkHeaderExists('Highest KDA')) {
       setCell('Highest KDA', row, getHighestKDA(row));
     }
-    if(!discludeLeague && includeLeague) {
+    
+    if(!discludeLeague) {
       if(checkHeaderExists('League') || checkHeaderExists('Division') || checkHeaderExists('Current LP') || checkHeaderExists('Promos')) {
         leagueStats = getMyLeagueStats(); 
         if(leagueStats == 'exit') {
@@ -308,25 +274,19 @@ function populate(match_history, specificRow, discludeLeague) {
       }
     }
     if(checkHeaderExists('My Dragons') || checkHeaderExists('Enemy Dragons') || checkHeaderExists('My Barons') || checkHeaderExists('Enemy Barons')) {
-      var neutral = getDragonsBaronsHeralds(match, teamId);
+      var neutral = getDragonsBarons(match, teamId);
       setCell('My Dragons', row, neutral['myDragons']);
       setCell('Enemy Dragons', row, neutral['enemyDragons']);
       setCell('My Barons', row, neutral['myBarons']);
       setCell('Enemy Barons', row, neutral['enemyBarons']);
-      if(checkHeaderExists('My Rift Heralds') || checkHeaderExists('Enemy Rift Heralds')) {
-        setCell('My Rift Heralds', row, neutral['myRiftHeralds']);
-        setCell('Enemy Rift Heralds', row, neutral['enemyRiftHeralds']);
-      }
     }
-    if(checkHeaderExists('First Blood') || checkHeaderExists('First Tower') || checkHeaderExists('First Inhibitor') || checkHeaderExists('First Dragon') 
-    || checkHeaderExists('First Baron') || checkHeaderExists('First Rift Herald')) {
+    if(checkHeaderExists('First Blood') || checkHeaderExists('First Tower') || checkHeaderExists('First Inhibitor') || checkHeaderExists('First Dragon') || checkHeaderExists('First Baron')) {
       var firstStats = getFirstStats(match, teamId);
       setCell('First Blood', row, firstStats['firstBlood']);
       setCell('First Tower', row, firstStats['firstTower']);
       setCell('First Inhibitor', row, firstStats['firstInhibitor']);
       setCell('First Dragon', row, firstStats['firstDragon']);
       setCell('First Baron', row, firstStats['firstBaron']);
-      setCell('First Rift Herald', row, firstStats['firstRiftHerald']);
     }
     if(checkHeaderExists('Damage to Champions')) {
       var damageToChamps = getChampionDamageDealt(pobj)/getTotalTeamDamage(match, teamId);
@@ -438,7 +398,7 @@ function setCell(column, row, value) {
     sheet.getRange(getSheetTranslation(column)+row).setValue(value);
   }
   catch(e) {
-    Browser.msgBox("Error: could not find cell ".concat(column).concat(" . Please ensure it exists before continuing"));
+//    Browser.msgBox("Error: could not find cell ".concat(column).concat(" . Please ensure it exists before continuing"));
   }
 }
 
@@ -458,13 +418,13 @@ function checkHeaderExists(header) {
  * Get the summoner id by name
  */
 function getSummonerId() {
-  var url = 'https://' + getInfo('region') + '.api.pvp.net/api/lol/' + getInfo('region') + '/v1.4' + '/summoner/by-name/' + encodeURIComponent(getInfo('summoner_name')) + '?api_key=' + getInfo('api_key');
+  var url = 'https://' + getInfo('region') + '.api.riotgames.com/lol/summoner/v4/summoners/by-name/' + encodeURIComponent(getInfo('summoner_name')) + '?api_key=' + getInfo('api_key');
   var response = UrlFetchApp.fetch(url, {muteHttpExceptions: true});
   var status = checkStatusError(response);
   if(!status) {
     var json = response.getContentText();
     var data = JSON.parse(json);  
-    return data[getInfo('summoner_name').replace(/ /g,'')]['id'];
+    return data['id'];
   }
   else if(status == 'exit') {
     return 'exit';
@@ -479,6 +439,28 @@ function getSummonerId() {
   }
 }
 
+function getAccountId() {
+  var url = 'https://' + getInfo('region') + '.api.riotgames.com/lol/summoner/v4/summoners/by-name/' + encodeURIComponent(getInfo('summoner_name')) + '?api_key=' + getInfo('api_key');
+  var response = UrlFetchApp.fetch(url, {muteHttpExceptions: true});
+  var status = checkStatusError(response);
+  if(!status) {
+    var json = response.getContentText();
+    var data = JSON.parse(json);  
+    return data['accountId'];
+  }
+  else if(status == 'exit') {
+    return 'exit';
+  }
+  else if(typeof(status) == 'number') {
+    Utilities.sleep(status);
+    return getAccountId();
+  }
+  else { // default wait 10 seconds if we fail but don't know why
+    Utilities.sleep(10000);
+    return getAccountId();
+  }
+}
+
 /*
  * Get the game ids for our matches
  * Note that this returns only ranked solo queue 5x5 games as per the current implementation
@@ -488,9 +470,10 @@ function getMatchHistoryIds(mode) {
   // we get match ids because the match history only has our information
   // and since we want to track other player kdas then we're going to need the full match info per match
   // NOTE: season is going to have to be changed each season
+  
+  // Season 2020: 1578628800000
   mode = typeof mode !== 'undefined' ? mode : '?rankedQueues=TEAM_BUILDER_DRAFT_RANKED_5x5,RANKED_SOLO_5x5';
-  season = getInfo('season') !== '' ? '&seasons=' + getInfo('season') : '';
-  var url = 'https://' + getInfo('region') + '.api.pvp.net/api/lol/' + getInfo('region') + '/v2.2' + '/matchlist/by-summoner/' + getInfo('summoner_id') + mode + season + '&api_key=' + getInfo('api_key'); 
+  var url = 'https://' + getInfo('region') + '.api.riotgames.com/lol/match/v4/matchlists/by-account/' + getInfo('account_id') + '?api_key=' + getInfo('api_key'); 
   var response = UrlFetchApp.fetch(url, {muteHttpExceptions: true});
   var status = checkStatusError(response);
   if(!status) {
@@ -503,10 +486,11 @@ function getMatchHistoryIds(mode) {
       return "exit";
     }
     for(i = 0; i < data["matches"].length; i++) {
-      if(data["matches"][i]["matchId"] != "undefined") {
-        matchIds.push(data["matches"][i]["matchId"]);
+      if(data["matches"][i]["gameId"] != "undefined" && data["matches"][i]["queue"] == 420 && data["matches"][i]["timestamp"] > 1578628800000) {
+        matchIds.push(data["matches"][i]["gameId"]);
       }
     }
+    Logger.log(matchIds);
     return matchIds;
   }
   else if(status == 'exit') {
@@ -527,7 +511,7 @@ function getMatchHistoryIds(mode) {
  * Returns the json object of the match
  */
 function getMatch(matchId) {
-  var url = 'https://' + getInfo('region') + '.api.pvp.net/api/lol/' + getInfo('region') + '/v2.2' + '/match/' + matchId + '?api_key=' + getInfo('api_key');
+  var url = 'https://' + getInfo('region') + '.api.riotgames.com/lol/match/v4/matches/' + matchId + '?api_key=' + getInfo('api_key');
   var response = UrlFetchApp.fetch(url, {muteHttpExceptions: true});
   var status = checkStatusError(response);
   if(!status) {
@@ -553,8 +537,7 @@ function getMatch(matchId) {
  * Returns an array with the date and time in that order
  */
 function getMatchDate(match) {
-
-  var utcSeconds = match['matchCreation'];
+  var utcSeconds = match['gameCreation'];
   var d = new Date(utcSeconds); 
   var date = d.toDateString();
   var time = d.toLocaleTimeString();
@@ -565,7 +548,7 @@ function getMatchDate(match) {
   else {
     h = time.substring(0,2);
   }
-  var ampm = time.substring(time.length - 6, time.length - 4);
+  var ampm = time.substring(time.length, time.length - 2);
   return [date, (h + ' ' + ampm)];
 }
 
@@ -573,7 +556,7 @@ function getMatchDate(match) {
  * Get the duration of a match
  */
 function getMatchLength(match) {
-  return Math.round(match['matchDuration']/60);
+  return Math.round(match['gameDuration']/60);
 }
 
 /*
@@ -583,7 +566,7 @@ function getMatchLength(match) {
 function getMatchParticipantId(match) {
   var participants = match['participantIdentities'];
   for(i = 0; i < participants.length; i++) {
-    if(participants[i]['player']['summonerName'].toLowerCase() == getInfo('summoner_name')) {
+    if(participants[i]['player']['summonerName'] == getInfo('summoner_name')) {
       return participants[i]['participantId'];
     }
   }
@@ -629,7 +612,7 @@ function getParticipantObjByName(match, name) {
   var pids = match['participantIdentities'];
   var pid = -1;
   for(i = 0; i < pids.length; i++) {
-    if(pids[i]['player']['summonerName'].toLowerCase() === name.toLowerCase()) {
+    if(pids[i]['player']['summonerName'] == name) {
       pid = pids[i]['participantId'];
       break;
     }
@@ -720,7 +703,7 @@ function getRoleFromParticipantObj(participant) {
   }
   // we couldn't determine their role at this time
   // likely an AFK or player got tagged as jungle when they're not jungle
-  else { 
+  else {
     return 'Unknown'; 
   }
 }
@@ -771,7 +754,7 @@ function getAndSetChampionStats(match, teamId, row) {
         invalid[team].push(details);
       }
     }
-    else if(role === 'Unknown' || role === 'Bot') {
+    else if(role === 'NONE' || role === 'Bot') {
       invalid[team].push(details);
     }
     else { // role is valid so set it as such
@@ -820,7 +803,6 @@ function getAndSetChampionStats(match, teamId, row) {
         results = fixSupport(valid[team], invalid[team]); // try to properly pick the support
         valid[team] = results[0];
         invalid[team] = results[1];
-
       }
       // if after a few times we didn't fix it, start randomly assigning
       // this should almost never happen and is just a fail safe so we don't crash and burn
@@ -997,11 +979,10 @@ function getMissingRoles(data) {
  * Takes in the match, teamId, and the row
  */
 function checkAllAFK(match, teamId, row) {
-
   /*
   We define AFK to be having 35% or less XP than the average
   Where the average doesn't consider non-zero entities
-  NOTE: We are testing 35% right now based on a a previous game to see if it breaks anything by being that high
+  NOTE: We are testing 35% right now based on a previous game to see if it breaks anything by being that high
   There was a game I got crushed in but I still had 52%, I expect as high as 40% is okay
   47% definitely broke it
   35% broke it and the value it broke on was 28%
@@ -1239,8 +1220,9 @@ function fixDuoBot(valid, invalid, match) {
   // if there is, decide who is adc, who is support, and fix
   var indexes = [];
   // this fails in scenarios where one of the two players is AFK and gets duo_mid
+  
   for(var i = 0; i < invalid.length; i++) {
-    if(invalid[i]['Role'] === 'Bot') {
+    if(invalid[i]['Role'] == 'Bot') {
       indexes.push(i);
     }
     else if(checkDuoSupportMid(invalid[i]['Champion'], match)) {
@@ -1288,7 +1270,7 @@ function checkDuoSupportMid(champion, match) {
   // need to check if the champion is AFK, essentially
   // Riot will tell us by the DUO_SUPPORT
   // important for fixing bot role issues when one player was AFK the entire time because they don't come up bot at all
-
+  
   var participants = match['participants'];
   for(var i = 0; i < participants.length; i++) {
     if(getChampionTranslation(participants[i]['championId']) === champion) {
@@ -1305,13 +1287,19 @@ function checkDuoSupportMid(champion, match) {
  * Get the name of a champion from its id
  */
 function getChampionTranslation(championId) {
-  var url = 'https://global.api.pvp.net/api/lol/static-data/na/v1.2/champion/' + championId + '?api_key=' + getInfo('api_key');
+  var url = 'http://ddragon.leagueoflegends.com/cdn/10.9.1/data/en_US/champion.json'
   var response = UrlFetchApp.fetch(url, {muteHttpExceptions: true});
   var status = checkStatusError(response);
   if(!status) {
     var json = response.getContentText();
     var data = JSON.parse(json);
-    return data['name'];
+    var name = '';
+    for (var champ in data['data']) {
+      if (data['data'][champ]['key'] == championId) {
+        name = champ;
+      }
+    }
+    return name;
   }
   else if(status == 'exit') {
     return 'exit';
@@ -1353,7 +1341,7 @@ function getPlayerStats(pobj) {
  * In the order: cs, cs/min
  */
 function getMyCS(pobj, length) {
-  var cs = pobj['stats']['minionsKilled'] + pobj['stats']['neutralMinionsKilled'];
+  var cs = pobj['stats']['totalMinionsKilled'] + pobj['stats']['neutralMinionsKilled'];
   var csmin = cs / length;
   return [cs, csmin];
 }
@@ -1364,7 +1352,7 @@ function getMyCS(pobj, length) {
  * Returns as an array, all are strings except LP which is an int
  */
 function getMyLeagueStats() {
-  var url = 'https://' + getInfo('region') + '.api.pvp.net/api/lol/' + getInfo('region') + '/v2.5' + '/league/by-summoner/' + getInfo('summoner_id') + '?api_key=' + getInfo('api_key');
+  var url = 'https://' + getInfo('region') + '.api.riotgames.com/lol/league/v4/entries/by-summoner/' + getInfo('summoner_id') + '?api_key=' + getInfo('api_key');
   var s = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = s.getSheetByName('Data');
   var response = UrlFetchApp.fetch(url, {muteHttpExceptions: true});
@@ -1374,21 +1362,15 @@ function getMyLeagueStats() {
     var data = JSON.parse(json);
     var stats = {};
     var division, lp, tier, promos;
-    stats['tier'] = data[getInfo('summoner_id')][0]['tier'];
-    for(i = 0; i < data[getInfo('summoner_id')][0]['entries'].length; i++) {
-      if(data[getInfo('summoner_id')][0]['entries'][i]['playerOrTeamName'].toLowerCase() == getInfo('summoner_name')) {
-        stats['division'] = data[getInfo('summoner_id')][0]['entries'][i]['division'];
-        stats['lp'] = data[getInfo('summoner_id')][0]['entries'][i]['leaguePoints'];
-        stats['promos'] = 'No';
-        if(data[getInfo('summoner_id')][0]['entries'][i]['miniSeries']) {
-          if(data[getInfo('summoner_id')][0]['entries'][i]['miniSeries']['progress'] != 'NNN') {
-            stats['promos'] = 'Yes';
-          }
-        }
-        //return [tier, division, lp, promos];
-        return stats;
-      }
+    stats['tier'] = data[0]['tier'];
+    stats['division'] = data[0]['rank'];
+    stats['lp'] = data[0]['leaguePoints'];
+    stats['promos'] = 'No';
+    if(data['leaguePoints'] == 100) {
+      stats['promos'] = 'Yes';
     }
+    //return [tier, division, lp, promos];
+    return stats;
   }
   else if(status == 'exit') {
     return 'exit';
@@ -1436,7 +1418,7 @@ function getAndSetDeltas(participant, row) {
   var deltaColumns = ['CS/Min Delta', 'Gold Delta', 'CS/Min Diff Delta'];
   // listed with a space so concat will work out nicer
   var deltaColumnTimes = [' 0 to 10', ' 10 to 20', ' 20 to 30', ' 30 to End'];
-  var deltaTimes = ['zeroToTen', 'tenToTwenty', 'twentyToThirty', 'thirtyToEnd'];
+  var deltaTimes = ['0-10', '10-20', '20-30', '30-end'];
   var deltas = participant['timeline'];  
   
   for(var deltaCount = 0; deltaCount <= 2; deltaCount++) {
@@ -1455,17 +1437,15 @@ function getAndSetDeltas(participant, row) {
 /*
  * Get the number of dragons and barons for each team
  */
-function getDragonsBaronsHeralds(match, teamId) {
+function getDragonsBarons(match, teamId) {
   var s = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = s.getSheetByName('Data');
   var myTeamIndex = teamId == 100 ? 0 : 1;
   var enemyTeamIndex = myTeamIndex == 0 ? 1 : 0;
   var neutralObjStats = {'myDragons': match['teams'][myTeamIndex]['dragonKills'],
                          'myBarons' : match['teams'][myTeamIndex]['baronKills'],
-                         'myRiftHeralds' : match['teams'][myTeamIndex]['riftHeraldKills'],
                          'enemyDragons' : match['teams'][enemyTeamIndex]['dragonKills'],
-                         'enemyBarons' : match['teams'][enemyTeamIndex]['baronKills'],
-                         'enemyRiftHeralds' : match['teams'][enemyTeamIndex]['riftHeraldKills']};
+                         'enemyBarons' : match['teams'][enemyTeamIndex]['baronKills'],};
   return neutralObjStats;
 }
   
@@ -1509,8 +1489,7 @@ function getFirstStats(match, teamId) {
                     'firstTower' : (match['teams'][myTeamIndex]['firstTower']) ? 'Yes' : 'No',
                     'firstInhibitor' : (match['teams'][myTeamIndex]['firstInhibitor']) ? 'Yes' : 'No',
                     'firstDragon' : (match['teams'][myTeamIndex]['firstDragon']) ? 'Yes' : 'No',
-                    'firstBaron' : (match['teams'][myTeamIndex]['firstBaron']) ? 'Yes' : 'No',
-                    'firstRiftHerald' : (match['teams'][myTeamIndex]['firstRiftHerald']) ? 'Yes' : 'No',};
+                    'firstBaron' : (match['teams'][myTeamIndex]['firstBaron']) ? 'Yes' : 'No',};
   return firstStats;
 }
 
@@ -1533,7 +1512,7 @@ function getTeamPlayers(match, teamId) {
   
   for(i = 0; i < match['participantIdentities'].length; i++) {
     if(pOnTeam.indexOf(match['participantIdentities'][i]['participantId']) != -1) {
-      summoners.push(match['participantIdentities'][i]['player']['summonerName'].toLowerCase());
+      summoners.push(match['participantIdentities'][i]['player']['summonerName']);
     }
   }
   return summoners;    
@@ -1706,7 +1685,7 @@ function fixRow() {
  */
 function getPatch(match) {
   // to remove the extra version info we don't need, we only want major.minor
-  var patch = match['matchVersion'].split('.');
+  var patch = match['gameVersion'].split('.');
   return patch[0].concat('.').concat(patch[1]);
 }
 
@@ -1714,104 +1693,16 @@ function getPatch(match) {
  * Private function
  * Used to add new columns and populate data for existing entries
  */
-function fixColumn(column) {
+function fixColumn() {
+  var columns = ['Patch'];
   var s = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = s.getSheetByName('Data');
-  var columns = [];
-  column = 'Rift Herald'; // temporary, add to config sheet later
-  if(column === 'Rift Herald') {
-    columns = ['My Rift Heralds', 'Enemy Rift Heralds', 'First Rift Herald'];
-  }
-  for(var row = getLastEmptyRow(columns[0]); row > 0; row--) {
-    // populate rift herald
-    var matchId = sheet.getRange(row, getSheetTranslationIndex('Match Id')).getValue();
+  for(var i = 520; i < getFirstEmptyRow(); i++) {
+    var matchId = sheet.getRange(i , getSheetTranslationIndex('Match Id')).getValue();
     var match = getMatch(matchId);
-    var pid = getMatchParticipantId(match);
-    if(pid === 'exit') {
-      return 'exit';
-    }
-    var pobj = getParticipantObj(match, pid);
-    var teamId = getMatchTeamId(pobj);
-    var enemyTeamId = getOpponentTeamId(teamId);
-    var myTeamIndex = teamId === 100 ? 0 : 1;
-    var enemyTeamIndex = enemyTeamId === 100 ? 0 : 1;
-    if(checkHeaderExists(columns[0])) {
-      var myRiftHeralds = match['teams'][myTeamIndex]['riftHeraldKills'];
-      Logger.log(myRiftHeralds);
-      if(typeof(myRiftHeralds) == 'number') {
-        setCell(columns[0], row, myRiftHeralds);
-      }
-      else {
-        return; // no rift heralds exist
-      }
-    }
-    else {
-      return;
-    }
-    if(checkHeaderExists(columns[1])) {
-      var enemyRiftHeralds = match['teams'][enemyTeamIndex]['riftHeraldKills'];
-      if(typeof(enemyRiftHeralds) == 'number') {
-        setCell(columns[1], row, enemyRiftHeralds);
-      }
-      else {
-        return;
-      }
-    }
-    else {
-      return;
-    }
-    if(checkHeaderExists(columns[2])) {
-      var firstRiftHerald = (match['teams'][myTeamIndex]['firstRiftHerald']) ? 'Yes' : 'No';
-      if(firstRiftHerald) {
-        setCell(columns[2], row, firstRiftHerald);
-      }
-      else {
-        return;
-      }
-    }
-    else {
-      return;
-    } 
+    var patch = getPatch(match);
+    setCell('Patch', i, patch);
   }
-}
-
-/*
- * Get the last empty row for a specific column
- * Used when updating to add new columns
- */
-function getLastEmptyRow(column) {
-  var s = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = s.getSheetByName('Data');
-  
-  // we can simply check in reverse binary order for the first empty one because we need to populate all empty rows
-  // and the order we populate in doesn't matter at all
-  // this way we don't run into the issue of needing to figure out whether rift herald exists yet or not
-  if(!checkHeaderExists(column)) {
-    Browser.msgBox("Error: Rift Herald column(s) not added. The column names are My Rift Heralds, Enemy Rift Heralds, and First Rift Herald");
-    return;
-  }
-  var row = sheet.getLastRow();
-  // special case if no rows are populated yet
-  if(sheet.getRange(row, getSheetTranslationIndex(column)).getValue() === '') {
-    return row;
-  }
-  var rowMax = row;
-  var rowMin = row/2;
-  row = Math.round(row - rowMin);
-  while(Math.abs(rowMax-rowMin)/2 > 1) {
-    if(sheet.getRange(row, getSheetTranslationIndex(column)).getValue() === '') {
-      row += Math.round(Math.abs(rowMax - rowMin) / 2);
-      rowMin = row;
-    }
-    else {
-      row -= Math.round(Math.abs(rowMax - rowMin) / 2);
-      rowMax = row;
-    }
-      
-  }
-  // return +1 to force refresh the last row that may be incomplete
-  // faster to force than check if we need to update
-  return row+1;
 }
 
 /*
@@ -1915,14 +1806,6 @@ function checkStatusError(response) {
   else if(code == 500 || code == 503) {
     Browser.msgBox("Error, Riot unavailable. Please try again later.");
     return "exit";
-  }
-  else if(code === 404) {
-    if(getInfo('summoner_id')) {
-      Browser.msgBox("Error, game not found. Riot is most likely experiencing technical difficulties related to their match history. Contact the author if this issue persists.");
-    }
-    else {
-      Browser.msgBox("Error, summoner ID not found. Please ensure your summoner name is correct.");
-    }
   }
   else {
     Browser.msgBox("Error, please make sure everything is configured correctly.");
